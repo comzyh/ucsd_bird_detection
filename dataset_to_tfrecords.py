@@ -17,7 +17,7 @@ def split_train_vaildation(images_path, filenames_and_bboxs, train_writer, vaild
         with open(os.path.join(images_path, filename), 'rb') as f:
             record = tf.train.Example(features=tf.train.Features(feature={
                 "image/encoded": tf.train.Feature(bytes_list=tf.train.BytesList(value=[f.read()])),
-                "image/bboxs": tf.train.Feature(float_list=tf.train.FloatList(value=bbox)),
+                "image/bbox": tf.train.Feature(float_list=tf.train.FloatList(value=bbox)),
             }))
         if i <= round(len(filenames_and_bboxs) * train_ratio):
             train_writer.write(record.SerializeToString())
@@ -100,7 +100,7 @@ def main():
         with open(os.path.join(args.datapath, 'bounding_boxes.txt')) as bboxs_file:
             image_files = tqdm(images_file.readlines())
             with tf.python_io.TFRecordWriter(os.path.join(args.output_path, 'train')) as train_writer:
-                with tf.python_io.TFRecordWriter(os.path.join(args.output_path, 'vaild')) as vaild_writer:
+                with tf.python_io.TFRecordWriter(os.path.join(args.output_path, 'validation')) as vaild_writer:
                     random.seed(515)  # deadline of this homework
                     for filenames_and_bboxs in get_filenames_and_bboxs(image_files, bboxs_file):
                         train_num += split_train_vaildation(
