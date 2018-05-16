@@ -95,12 +95,11 @@ def box_intersection(box1, box2):
 def model_fn(features, labels, mode):
 
     x = resnet18_v2(inputs=features, N_final=4, is_training=(mode == tf.estimator.ModeKeys.TRAIN))
-    print(x, labels)
     loss = tf.reduce_sum(abs_smooth(x - labels))
     score = box_intersection(x, labels)
 
-    correct = tf.greater(x, 0.75)
-    accuracy, update_op = tf.metrics.accuracy(labels=tf.ones_like(x), predictions=correct, name='accuracy')
+    correct = tf.greater(score, 0.75)
+    accuracy, update_op = tf.metrics.accuracy(labels=tf.ones_like(correct), predictions=correct, name='accuracy')
     mean_score = tf.reduce_mean(score)
     tf.summary.scalar('accuracy', accuracy)
     tf.summary.scalar('mean_score', mean_score)
@@ -108,9 +107,12 @@ def model_fn(features, labels, mode):
     if mode == tf.estimator.ModeKeys.TRAIN:
         optimizer = tf.train.AdamOptimizer(learning_rate=0.0001, name='Adam')
 
-        train_op = optimizer.minimize(
+        train_op = []
+        train_op.append(optimizer.minimize(
             loss=loss,
-            global_step=tf.train.get_global_step())
+            global_step=tf.train.get_global_step()))
+        train_op.append(update_op)
+        train_op = tf.group(*train_op)
         return tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op)
 
     eval_metric_ops = {"accuracy": accuracy}
@@ -127,7 +129,7 @@ def main():
                                     save_summary_steps=50,
                                     save_checkpoints_steps=500,
                                     keep_checkpoint_max=3,
-                                    log_step_count_steps=1)
+                                    log_step_count_steps=50)
 
     ucsd_bird_detector = tf.estimator.Estimator(model_fn=model_fn, config=config)
 
@@ -149,8 +151,6 @@ def main():
 
         return input_fn
 
-    # import IPython
-    # IPython.embed()
     for epoch in range(10):
         ucsd_bird_detector.train(input_fn=input_fn_factory('train'))
 
