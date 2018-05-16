@@ -49,7 +49,7 @@ def get_dataset(tfrecord_dir, setname):
         w = bbox[2] * xscale
         h = bbox[3] * yscale
 
-        bbox = tf.stack([x, y, w, h], axis=0) / 224
+        bbox = tf.stack([x, y, w, h], axis=0)
         image = tf.image.resize_images(image, target_shape[:2])
 
         means = [122.81981232, 127.39550182, 108.8589721]
@@ -109,7 +109,7 @@ def model_fn(features, labels, mode):
     accuracy, accuracy_uop = tf.metrics.accuracy(labels=tf.ones_like(correct), predictions=correct, name='accuracy')
     mean_score, mean_score_uop = tf.metrics.mean(score)
 
-    tf.summary.scalar('stream_accuracy', accuracy)
+    tf.summary.scalar('acc', accuracy)
     tf.summary.scalar('mean_score', mean_score)
 
     if mode == tf.estimator.ModeKeys.TRAIN:
@@ -125,7 +125,7 @@ def model_fn(features, labels, mode):
         return tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op)
 
     eval_metric_ops = {
-        "accuracy": (accuracy, accuracy_uop),
+        "acc": (accuracy, accuracy_uop),
         "mean_score": (mean_score, mean_score_uop),
     }
 
