@@ -7,6 +7,8 @@ from PIL import Image, ImageDraw
 
 from resnet_model import resnet18_v2
 
+tf.logging.set_verbosity(tf.logging.INFO)
+
 
 def draw_box(array, box_r=None, box_g=None):
 
@@ -35,7 +37,7 @@ def get_dataset(tfrecord_dir, setname):
             'image/bbox': tf.FixedLenFeature((4, ), tf.float32, default_value=tf.zeros(4, dtype=tf.float32)),
         }
         parsed = tf.parse_single_example(record, keys_to_features)
-        image = tf.image.decode_jpeg(parsed["image/encoded"])
+        image = tf.image.decode_jpeg(parsed["image/encoded"], channels=3)
         bbox = parsed['image/bbox']
         target_shape = (224, 224, 3)  # (W, H)
 
@@ -49,8 +51,6 @@ def get_dataset(tfrecord_dir, setname):
 
         bbox = tf.stack([x, y, w, h], axis=0)
         image = tf.image.resize_images(image, target_shape[:2])
-        image = tf.reshape(image, target_shape)
-
         return image, bbox
 
     dataset = dataset.map(parser)
@@ -123,19 +123,34 @@ def main():
     parser.add_argument('--datapath', type=str, required=True, help='location of CUB-200 tfrecords')
     # parser.add_argument('--model', type=str, default='/tmp/cub_200_resnet', help='location of model')
     args = parser.parse_args()
+    config = tf.estimator.RunConfig(model_dir="/tmp/ucsdbird",
+                                    save_summary_steps=50,
+                                    save_checkpoints_steps=500,
+                                    keep_checkpoint_max=3,
+                                    log_step_count_steps=1)
 
-    ucsd_bird_detector = tf.estimator.Estimator(model_fn=model_fn, model_dir="/tmp")
+    ucsd_bird_detector = tf.estimator.Estimator(model_fn=model_fn, config=config)
+
+    batch_size = 100
 
     def input_fn_factory(setname):
         def input_fn():
             dataset = get_dataset(args.datapath, setname)
-            dataset = dataset.batch(1)
             iterator = dataset.make_one_shot_iterator()
             image_batch, label_batch = iterator.get_next()
+            image_batch, label_batch = tf.train.batch(
+                [image_batch, label_batch],
+                batch_size=batch_size,
+                num_threads=8,
+                capacity=2 * batch_size,
+                allow_smaller_final_batch=True
+            )
             return image_batch, label_batch
 
         return input_fn
 
+    # import IPython
+    # IPython.embed()
     for epoch in range(10):
         ucsd_bird_detector.train(input_fn=input_fn_factory('train'))
 
