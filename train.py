@@ -49,11 +49,18 @@ def get_dataset(tfrecord_dir, setname):
         w = bbox[2] * xscale
         h = bbox[3] * yscale
 
-        bbox = tf.stack([x, y, w, h], axis=0)
+        bbox = tf.stack([x, y, w, h], axis=0) / 224
         image = tf.image.resize_images(image, target_shape[:2])
+
+        means = [122.81981232, 127.39550182, 108.8589721]
+        channels = tf.split(axis=2, num_or_size_splits=3, value=image)
+        for i in range(3):
+            channels[i] -= means[i]
+        image = tf.concat(axis=2, values=channels) / 128.0
+
         return image, bbox
 
-    dataset = dataset.map(parser)
+    dataset = dataset.map(parser, num_parallel_calls=8)
     return dataset
 
 
@@ -83,9 +90,9 @@ def box_intersection(box1, box2):
     r = tf.minimum(box1[:, 2], box2[:, 2])
     b = tf.minimum(box1[:, 3], box2[:, 3])
 
-    v1 = (box1[:, 2] - box1[:, 0]) * (box1[:, 3] - box1[:, 1])
-    v2 = (box2[:, 2] - box2[:, 0]) * (box2[:, 3] - box2[:, 1])
-    vin = (r - l) * (b - t)
+    v1 = tf.maximum(box1[:, 2] - box1[:, 0], 0) * tf.maximum(box1[:, 3] - box1[:, 1], 0)
+    v2 = tf.maximum(box2[:, 2] - box2[:, 0], 0) * tf.maximum(box2[:, 3] - box2[:, 1], 0)
+    vin = tf.maximum(r - l, 0) * tf.maximum(b - t, 0)
     vall = v1 + v2 - vin
     score = tf.where(tf.greater(vin, 0), vin / vall, tf.zeros_like(vin))
 
@@ -103,9 +110,10 @@ def model_fn(features, labels, mode):
     mean_score, mean_score_uop = tf.metrics.mean(score)
 
     tf.summary.scalar('stream_accuracy', accuracy)
+    tf.summary.scalar('mean_score', mean_score)
 
     if mode == tf.estimator.ModeKeys.TRAIN:
-        optimizer = tf.train.AdamOptimizer(learning_rate=0.001, name='Adam')
+        optimizer = tf.train.AdamOptimizer(learning_rate=0.0001, name='Adam')
 
         train_op = []
         train_op.append(optimizer.minimize(
@@ -120,6 +128,7 @@ def model_fn(features, labels, mode):
         "accuracy": (accuracy, accuracy_uop),
         "mean_score": (mean_score, mean_score_uop),
     }
+
     return tf.estimator.EstimatorSpec(
         mode=mode, loss=loss, eval_metric_ops=eval_metric_ops)
 
@@ -142,15 +151,9 @@ def main():
     def input_fn_factory(setname):
         def input_fn():
             dataset = get_dataset(args.datapath, setname)
+            dataset = dataset.batch(batch_size).prefetch(2)
             iterator = dataset.make_one_shot_iterator()
             image_batch, label_batch = iterator.get_next()
-            image_batch, label_batch = tf.train.batch(
-                [image_batch, label_batch],
-                batch_size=batch_size,
-                num_threads=8,
-                capacity=2 * batch_size,
-                allow_smaller_final_batch=True
-            )
             return image_batch, label_batch
 
         return input_fn
