@@ -99,23 +99,27 @@ def model_fn(features, labels, mode):
     score = box_intersection(x, labels)
 
     correct = tf.greater(score, 0.75)
-    accuracy, update_op = tf.metrics.accuracy(labels=tf.ones_like(correct), predictions=correct, name='accuracy')
-    mean_score = tf.reduce_mean(score)
-    tf.summary.scalar('accuracy', accuracy)
-    tf.summary.scalar('mean_score', mean_score)
+    accuracy, accuracy_uop = tf.metrics.accuracy(labels=tf.ones_like(correct), predictions=correct, name='accuracy')
+    mean_score, mean_score_uop = tf.metrics.mean(score)
+
+    tf.summary.scalar('stream_accuracy', accuracy)
 
     if mode == tf.estimator.ModeKeys.TRAIN:
-        optimizer = tf.train.AdamOptimizer(learning_rate=0.0001, name='Adam')
+        optimizer = tf.train.AdamOptimizer(learning_rate=0.001, name='Adam')
 
         train_op = []
         train_op.append(optimizer.minimize(
             loss=loss,
             global_step=tf.train.get_global_step()))
-        train_op.append(update_op)
+        train_op.append(accuracy_uop)
+        train_op.append(mean_score_uop)
         train_op = tf.group(*train_op)
         return tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op)
 
-    eval_metric_ops = {"accuracy": accuracy}
+    eval_metric_ops = {
+        "accuracy": (accuracy, accuracy_uop),
+        "mean_score": (mean_score, mean_score_uop),
+    }
     return tf.estimator.EstimatorSpec(
         mode=mode, loss=loss, eval_metric_ops=eval_metric_ops)
 
@@ -126,9 +130,9 @@ def main():
     # parser.add_argument('--model', type=str, default='/tmp/cub_200_resnet', help='location of model')
     args = parser.parse_args()
     config = tf.estimator.RunConfig(model_dir="/tmp/ucsdbird",
-                                    save_summary_steps=50,
+                                    save_summary_steps=10,
                                     save_checkpoints_steps=500,
-                                    keep_checkpoint_max=3,
+                                    keep_checkpoint_max=10,
                                     log_step_count_steps=50)
 
     ucsd_bird_detector = tf.estimator.Estimator(model_fn=model_fn, config=config)
@@ -151,8 +155,11 @@ def main():
 
         return input_fn
 
-    for epoch in range(10):
+    for epoch in range(40):
+        print('Epoch {}'.format(epoch))
         ucsd_bird_detector.train(input_fn=input_fn_factory('train'))
+        eval_results = ucsd_bird_detector.evaluate(input_fn=input_fn_factory('validation'))
+        print(eval_results)
 
 
 if __name__ == '__main__':
