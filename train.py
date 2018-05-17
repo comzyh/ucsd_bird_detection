@@ -44,10 +44,10 @@ def get_dataset(tfrecord_dir, setname):
         xscale = target_shape[0] / tf.to_float(tf.shape(image)[1])  # image shape is (H, W)
         yscale = target_shape[1] / tf.to_float(tf.shape(image)[0])
 
-        x = bbox[0] * xscale / 112.0 - 1.0
-        y = bbox[1] * yscale / 112.0 - 1.0
-        w = bbox[2] * xscale / 112.0
-        h = bbox[3] * yscale / 112.0
+        x = bbox[0] * xscale  # / 112.0 - 1.0
+        y = bbox[1] * yscale  # / 112.0 - 1.0
+        w = bbox[2] * xscale  # / 112.0
+        h = bbox[3] * yscale  # / 112.0
 
         bbox = tf.stack([x, y, w, h], axis=0)
         image = tf.image.resize_images(image, target_shape[:2])
@@ -86,42 +86,39 @@ def box_intersection(box1, box2):
 
 def model_fn(features, labels, mode):
 
-    x = resnet18_v2(inputs=features, N_final=1024, is_training=(mode == tf.estimator.ModeKeys.TRAIN))
-    x = tf.layers.dropout(inputs=x,
-                          rate=0.5,
-                          training=(mode == tf.estimator.ModeKeys.TRAIN),
-                          name='dropout1')
-    x = tf.layers.dense(inputs=x,
-                        units=4,
-                        activation=tf.nn.leaky_relu,
-                        name='fc2')
+    x = resnet18_v2(inputs=features, N_final=4, is_training=(mode == tf.estimator.ModeKeys.TRAIN))
 
     loss = tf.losses.huber_loss(labels=labels, predictions=x)
     score = box_intersection(x, labels)
 
     correct = tf.greater(score, 0.75)
-    accuracy, accuracy_uop = tf.metrics.accuracy(labels=tf.ones_like(correct), predictions=correct, name='accuracy')
+    correct_ref = tf.ones_like(correct)
+    accuracy, accuracy_uop = tf.metrics.accuracy(labels=correct_ref, predictions=correct, name='accuracy')
+    ioup5, ioup5_uop = tf.metrics.accuracy(labels=correct_ref, predictions=tf.greater(score, 0.5), name='accuracy')
     mean_score, mean_score_uop = tf.metrics.mean(score)
 
     tf.summary.scalar('acc', accuracy)
     tf.summary.scalar('mean_score', mean_score)
+    tf.summary.scalar('ioup5', ioup5)
 
     if mode == tf.estimator.ModeKeys.TRAIN:
 
         optimizer = tf.train.AdamOptimizer(learning_rate=0.00005, name='Adam')
 
-        train_op = []
+        train_op = tf.get_collection(tf.GraphKeys.UPDATE_OPS) # for batch_normalization
         train_op.append(optimizer.minimize(
             loss=loss,
             global_step=tf.train.get_global_step()))
         train_op.append(accuracy_uop)
         train_op.append(mean_score_uop)
+        train_op.append(ioup5_uop)
         train_op = tf.group(*train_op)
         return tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op)
 
     eval_metric_ops = {
         "acc": (accuracy, accuracy_uop),
         "mean_score": (mean_score, mean_score_uop),
+        "ioup5": (ioup5, ioup5_uop),
     }
 
     return tf.estimator.EstimatorSpec(
@@ -146,7 +143,7 @@ def main():
     def input_fn_factory(setname):
         def input_fn():
             dataset = get_dataset(args.datapath, setname)
-            dataset = dataset.batch(batch_size).prefetch(2)
+            dataset = dataset.shuffle(1000).batch(batch_size).prefetch(2)
             iterator = dataset.make_one_shot_iterator()
             image_batch, label_batch = iterator.get_next()
             return image_batch, label_batch

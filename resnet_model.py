@@ -214,10 +214,10 @@ def resnet18_v2(inputs, N_final=4, is_training=True, data_format='channels_last'
 
     # global average polling
 
-    # inputs = tf.reduce_mean(inputs, [1, 2], keepdims=True)
-    # inputs = tf.reshape(inputs, [-1, filters[4]])
+    inputs = tf.reduce_mean(inputs, [1, 2], keepdims=True)
+    inputs = tf.reshape(inputs, [-1, filters[4]])
 
-    inputs = tf.reshape(inputs, [-1, 7 * 7 * filters[4]])
+    # inputs = tf.reshape(inputs, [-1, 7 * 7 * filters[4]])
     inputs = tf.layers.dense(inputs=inputs,
                              units=N_final,
                              activation=tf.nn.leaky_relu,  # linear
