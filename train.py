@@ -44,10 +44,10 @@ def get_dataset(tfrecord_dir, setname):
         xscale = target_shape[0] / tf.to_float(tf.shape(image)[1])  # image shape is (H, W)
         yscale = target_shape[1] / tf.to_float(tf.shape(image)[0])
 
-        x = bbox[0] * xscale
-        y = bbox[1] * yscale
-        w = bbox[2] * xscale
-        h = bbox[3] * yscale
+        x = bbox[0] * xscale / 112.0 - 1.0
+        y = bbox[1] * yscale / 112.0 - 1.0
+        w = bbox[2] * xscale / 112.0
+        h = bbox[3] * yscale / 112.0
 
         bbox = tf.stack([x, y, w, h], axis=0)
         image = tf.image.resize_images(image, target_shape[:2])
@@ -56,27 +56,12 @@ def get_dataset(tfrecord_dir, setname):
         channels = tf.split(axis=2, num_or_size_splits=3, value=image)
         for i in range(3):
             channels[i] -= means[i]
-        image = tf.concat(axis=2, values=channels) / 128.0
+        image = tf.concat(axis=2, values=channels)
 
         return image, bbox
 
     dataset = dataset.map(parser, num_parallel_calls=8)
     return dataset
-
-
-def abs_smooth(x):
-    """Smoothed absolute function. Useful to compute an L1 smooth error.
-    Define as:
-        x^2 / 2         if abs(x) < 1
-        abs(x) - 0.5    if abs(x) > 1
-    We use here a differentiable definition using min(x) and abs(x). Clearly
-    not optimal, but good enough for our purpose!
-    https://github.com/balancap/SSD-Tensorflow/blob/master/nets/custom_layers.py
-    """
-    absx = tf.abs(x)
-    minx = tf.minimum(absx, 1)
-    r = 0.5 * ((absx - 1) * minx + absx)
-    return r
 
 
 def box_intersection(box1, box2):
@@ -101,8 +86,16 @@ def box_intersection(box1, box2):
 
 def model_fn(features, labels, mode):
 
-    x = resnet18_v2(inputs=features, N_final=4, is_training=(mode == tf.estimator.ModeKeys.TRAIN))
-    # loss = tf.reduce_sum(abs_smooth(x - labels))
+    x = resnet18_v2(inputs=features, N_final=1024, is_training=(mode == tf.estimator.ModeKeys.TRAIN))
+    x = tf.layers.dropout(inputs=x,
+                          rate=0.5,
+                          training=(mode == tf.estimator.ModeKeys.TRAIN),
+                          name='dropout1')
+    x = tf.layers.dense(inputs=x,
+                        units=4,
+                        activation=tf.nn.leaky_relu,
+                        name='fc2')
+
     loss = tf.losses.huber_loss(labels=labels, predictions=x)
     score = box_intersection(x, labels)
 
@@ -114,7 +107,8 @@ def model_fn(features, labels, mode):
     tf.summary.scalar('mean_score', mean_score)
 
     if mode == tf.estimator.ModeKeys.TRAIN:
-        optimizer = tf.train.AdamOptimizer(learning_rate=0.0001, name='Adam')
+
+        optimizer = tf.train.AdamOptimizer(learning_rate=0.00005, name='Adam')
 
         train_op = []
         train_op.append(optimizer.minimize(
