@@ -102,7 +102,8 @@ def box_intersection(box1, box2):
 def model_fn(features, labels, mode):
 
     x = resnet18_v2(inputs=features, N_final=4, is_training=(mode == tf.estimator.ModeKeys.TRAIN))
-    loss = tf.reduce_sum(abs_smooth(x - labels))
+    # loss = tf.reduce_sum(abs_smooth(x - labels))
+    loss = tf.losses.huber_loss(labels=labels, predictions=x)
     score = box_intersection(x, labels)
 
     correct = tf.greater(score, 0.75)
