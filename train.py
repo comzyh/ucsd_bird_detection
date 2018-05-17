@@ -101,23 +101,23 @@ def model_fn(features, labels, mode):
         learning_rate = tf.train.exponential_decay(learning_rate=0.0005,
                                                    global_step=tf.train.get_global_step(),
                                                    decay_steps=1000,
-                                                   decay_rate=0.5,
+                                                   decay_rate=0.9,
                                                    staircase=True)
 
         optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, name='Adam')
 
         train_op = tf.get_collection(tf.GraphKeys.UPDATE_OPS)  # for batch_normalization
-        train_op.append(optimizer.minimize(
-            loss=loss,
-            global_step=tf.train.get_global_step()))
         train_op.append(accuracy[1])
         train_op.append(mean_score[1])
         train_op.append(ioup5[1])
+        train_op.append(optimizer.minimize(
+            loss=loss,
+            global_step=tf.train.get_global_step()))
         train_op = tf.group(*train_op)
 
-        tf.summary.scalar('acc', accuracy[0])
-        tf.summary.scalar('mean_score', mean_score[0])
-        tf.summary.scalar('ioup5', ioup5[0])
+        tf.summary.scalar('acc', accuracy[1])
+        tf.summary.scalar('mean_score', mean_score[1])
+        tf.summary.scalar('ioup5', ioup5[1])
         tf.summary.scalar('learning_rate', learning_rate)
 
         return tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op)
@@ -138,7 +138,7 @@ def main():
     # parser.add_argument('--model', type=str, default='/tmp/cub_200_resnet', help='location of model')
     args = parser.parse_args()
     config = tf.estimator.RunConfig(model_dir="/tmp/ucsdbird",
-                                    save_summary_steps=10,
+                                    save_summary_steps=1,
                                     save_checkpoints_steps=100,
                                     keep_checkpoint_max=10,
                                     log_step_count_steps=10)
