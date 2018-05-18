@@ -17,11 +17,45 @@ def draw_box(array, box_r=None, box_g=None):
     if box_r is not None:
         draw.rectangle(((box_r[0], box_r[1]), (box_r[0] + box_r[2], box_r[1] + box_r[3])), outline="red")
     if box_g is not None:
-        draw.rectangle(((box_g[0], box_g[1]), (box_g[0] + box_g[2], box_g[1] + box_g[3])), outline="red")
+        draw.rectangle(((box_g[0], box_g[1]), (box_g[0] + box_g[2], box_g[1] + box_g[3])), outline="green")
     return source_img
 
 
-def get_dataset(tfrecord_dir, setname):
+def parse_record(record):
+    keys_to_features = {
+        'image/encoded': tf.FixedLenFeature((), tf.string, default_value=''),
+        'image/bbox': tf.FixedLenFeature((4, ), tf.float32, default_value=tf.zeros(4, dtype=tf.float32)),
+    }
+    parsed = tf.parse_single_example(record, keys_to_features)
+    image = tf.image.decode_jpeg(parsed["image/encoded"], channels=3)
+    bbox = parsed['image/bbox']
+    return image, bbox
+
+
+def model_preprocess(image, bbox):
+    target_shape = (224, 224, 3)  # (W, H)
+
+    xscale = target_shape[0] / tf.to_float(tf.shape(image)[1])  # image shape is (H, W)
+    yscale = target_shape[1] / tf.to_float(tf.shape(image)[0])
+
+    x = bbox[0] * xscale  # / 112.0 - 1.0
+    y = bbox[1] * yscale  # / 112.0 - 1.0
+    w = bbox[2] * xscale  # / 112.0
+    h = bbox[3] * yscale  # / 112.0
+
+    bbox = tf.stack([x, y, w, h], axis=0)
+    image = tf.image.resize_images(image, target_shape[:2])
+
+    means = [122.81981232, 127.39550182, 108.8589721]
+    channels = tf.split(axis=2, num_or_size_splits=3, value=image)
+    for i in range(3):
+        channels[i] -= means[i]
+    image = tf.concat(axis=2, values=channels)
+
+    return image, bbox
+
+
+def get_dataset(tfrecord_dir, setname, preprocesss=True):
     DATASET_SIZES = {
         'train': 9422,
         'validation': 2366,
@@ -32,32 +66,9 @@ def get_dataset(tfrecord_dir, setname):
     dataset = tf.data.TFRecordDataset(filenames)
 
     def parser(record):
-        keys_to_features = {
-            'image/encoded': tf.FixedLenFeature((), tf.string, default_value=''),
-            'image/bbox': tf.FixedLenFeature((4, ), tf.float32, default_value=tf.zeros(4, dtype=tf.float32)),
-        }
-        parsed = tf.parse_single_example(record, keys_to_features)
-        image = tf.image.decode_jpeg(parsed["image/encoded"], channels=3)
-        bbox = parsed['image/bbox']
-        target_shape = (224, 224, 3)  # (W, H)
-
-        xscale = target_shape[0] / tf.to_float(tf.shape(image)[1])  # image shape is (H, W)
-        yscale = target_shape[1] / tf.to_float(tf.shape(image)[0])
-
-        x = bbox[0] * xscale  # / 112.0 - 1.0
-        y = bbox[1] * yscale  # / 112.0 - 1.0
-        w = bbox[2] * xscale  # / 112.0
-        h = bbox[3] * yscale  # / 112.0
-
-        bbox = tf.stack([x, y, w, h], axis=0)
-        image = tf.image.resize_images(image, target_shape[:2])
-
-        means = [122.81981232, 127.39550182, 108.8589721]
-        channels = tf.split(axis=2, num_or_size_splits=3, value=image)
-        for i in range(3):
-            channels[i] -= means[i]
-        image = tf.concat(axis=2, values=channels)
-
+        image, bbox = parse_record(record)
+        if preprocesss:
+            image, bbox = model_preprocess(image, bbox)
         return image, bbox
 
     dataset = dataset.map(parser, num_parallel_calls=8)
@@ -88,19 +99,22 @@ def model_fn(features, labels, mode):
 
     x = resnet18_v2(inputs=features, N_final=4, is_training=(mode == tf.estimator.ModeKeys.TRAIN))
 
+    if mode == tf.estimator.ModeKeys.PREDICT:
+        return tf.estimator.EstimatorSpec(mode=mode, predictions=x)
+
     loss = tf.losses.huber_loss(labels=labels, predictions=x)
     score = box_intersection(x, labels)
 
     correct = tf.greater(score, 0.75)
     correct_ref = tf.ones_like(correct)
-    accuracy= tf.metrics.accuracy(labels=correct_ref, predictions=correct, name='accuracy')
+    accuracy = tf.metrics.accuracy(labels=correct_ref, predictions=correct, name='accuracy')
     ioup5 = tf.metrics.accuracy(labels=correct_ref, predictions=tf.greater(score, 0.5), name='accuracy')
     mean_score = tf.metrics.mean(score)
 
     if mode == tf.estimator.ModeKeys.TRAIN:
         learning_rate = tf.train.exponential_decay(learning_rate=0.0005,
                                                    global_step=tf.train.get_global_step(),
-                                                   decay_steps=1000,
+                                                   decay_steps=500,
                                                    decay_rate=0.9,
                                                    staircase=True)
 
@@ -135,9 +149,12 @@ def model_fn(features, labels, mode):
 def main():
     parser = argparse.ArgumentParser(description='train CUB-200 detection')
     parser.add_argument('--datapath', type=str, required=True, help='location of CUB-200 tfrecords')
-    # parser.add_argument('--model', type=str, default='/tmp/cub_200_resnet', help='location of model')
+    parser.add_argument('--model_dir', type=str, default='/tmp/ucsdbird', help='directory to save model')
+    parser.add_argument('--evalue', action='store_true', help='show window to evalue model')
+
     args = parser.parse_args()
-    config = tf.estimator.RunConfig(model_dir="/tmp/ucsdbird",
+
+    config = tf.estimator.RunConfig(model_dir=args.model_dir,
                                     save_summary_steps=1,
                                     save_checkpoints_steps=100,
                                     keep_checkpoint_max=10,
@@ -150,12 +167,36 @@ def main():
     def input_fn_factory(setname):
         def input_fn():
             dataset = get_dataset(args.datapath, setname)
-            dataset = dataset.shuffle(1000).batch(batch_size).prefetch(2)
+            if setname == 'train':
+                dataset = dataset.shuffle(1000)
+            if setname != 'evalue':
+                dataset = dataset.batch(batch_size)
+            dataset = dataset.prefetch(2)
             iterator = dataset.make_one_shot_iterator()
             image_batch, label_batch = iterator.get_next()
             return image_batch, label_batch
 
         return input_fn
+
+    if args.evalue:
+        dataset = get_dataset(args.datapath, 'validation', preprocesss=False)
+        iterator = dataset.make_one_shot_iterator()
+        next_element = iterator.get_next()
+        processed_element = model_preprocess(*next_element)
+
+        with tf.Session() as sess:
+            def get_next_figure():
+                image, label, pimage = sess.run(next_element + processed_element[:1])
+                input_fn = tf.estimator.inputs.numpy_input_fn(np.expand_dims(pimage, 0), shuffle=False)
+                result = next(ucsd_bird_detector.predict(input_fn=input_fn))
+                scale = np.array([image.shape[1] / 224.0, image.shape[0]/224.0] * 2, dtype=np.float32)
+                result *= scale
+                image_with_box = draw_box(image, result, label)
+                return image_with_box
+            # figure = get_next_figure();figure.show()
+            import IPython
+            IPython.embed()
+        return
 
     for epoch in range(40):
         print('Epoch {}'.format(epoch))
